@@ -5,7 +5,7 @@ Chatbot was written using full transformer model with 6 encoders and 6 decoders.
 
 ## Demo
 
-[gif]
+<img src="gifs/chatting.gif" width="768px" />
 
 ## TODO
 Add memory to model.
