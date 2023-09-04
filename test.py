@@ -25,7 +25,7 @@ def test():
         T.AddToken(token=config.sos_idx, begin=True),
         T.AddToken(token=config.eos_idx, begin=False),
         T.ToTensor(),
-        T.PadTransform(config.max_seq_len, config.padding_idx)
+        T.PadTransform(config.max_seq_len, config.pad_idx)
     )
 
     model = Seq2Seq(num_tokens=len(vocab)).to(config.device)
@@ -35,13 +35,13 @@ def test():
     while True:
         inp = input('> ')
 
-        x = transforms(inp).unsqueeze(0).to(config.device)
+        x = transforms(inp).unsqueeze(0).repeat(config.batch_size, 1).to(config.device)
         pred = ['<sos>']
 
         while pred[-1] != '<eos>':
-            y = torch.tensor(vocab.lookup_indices(pred), device=config.device).unsqueeze(0)
-            logits = model(x, y)  # [seq_len, batch_size, num_tokens]
-            logits = logits.squeeze(1)[-1]  # [num_tokens]
+            y = torch.tensor(vocab.lookup_indices(pred), device=config.device).unsqueeze(0).repeat(config.batch_size, 1)
+            logits = model(x, y, train=False)  # [batch_size, seq_len, num_tokens]
+            logits = logits[0][-1]  # [num_tokens]
             out = nucleus_search(logits)
             out = vocab.lookup_token(out)
 

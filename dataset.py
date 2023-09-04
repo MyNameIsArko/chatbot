@@ -1,18 +1,21 @@
 import os.path
 import pickle
 
+import torch
 from torch.utils.data import Dataset, DataLoader
 from torchtext.data import get_tokenizer
 from torchtext.vocab import build_vocab_from_iterator
-from torchtext.datasets import SQuAD1
+import pickle
 import torchtext.transforms as T
 import torch.nn as nn
 import config
+import os
 
 
 class ChatDataset(Dataset):
     def __init__(self, chat_path, transform=None):
-        self.dialogs = open(chat_path, 'r').readlines()
+        with open(chat_path, 'rb') as file:
+            self.dialogs = pickle.load(file)
 
         self.transform = transform
 
@@ -20,21 +23,25 @@ class ChatDataset(Dataset):
         return len(self.dialogs)
 
     def __getitem__(self, idx):
-        text = self.dialogs[idx]
-
-        q, a = text.split('\t')
-        q = q.strip()
-        a = a.strip()
+        dialog = self.dialogs[idx]
 
         if self.transform:
-            q = self.transform(q)
-            a = self.transform(a)
+            dialog = [self.transform(d) for d in dialog]
 
-        return q, a
+        while len(dialog) < config.num_dialogs:
+            dialog.append(torch.tensor([config.sos_idx, config.eos_idx] + [config.pad_idx for _ in range(config.max_seq_len - 2)]))
+
+        if len(dialog) > config.num_dialogs:
+            start_idx = torch.randint(0, len(dialog) - config.num_dialogs, (1,))
+            dialog = dialog[start_idx:start_idx+config.num_dialogs]
+
+        out = tuple(dialog)
+        return out
 
     def __iter__(self):
-        for text in self.dialogs:
-            yield text
+        for dialog in self.dialogs:
+            for text in dialog:
+                yield text
 
 
 class TokenizerTransform(nn.Module):
@@ -49,10 +56,10 @@ class TokenizerTransform(nn.Module):
 def get_data():
     tokenizer = get_tokenizer('basic_english')
 
-    data = ChatDataset('./data/dialogs.txt')
+    data = ChatDataset('./data/dialogs.pkl')
 
     vocab = build_vocab_from_iterator(map(tokenizer, data), specials=['<unk>', '<pad>', '<sos>', '<eos>'])
-    vocab.set_default_index(config.unknown_idx)
+    vocab.set_default_index(config.unk_idx)
 
     with open('data/vocab.pkl', 'wb') as f:
         pickle.dump(vocab, f)
@@ -64,17 +71,13 @@ def get_data():
         T.AddToken(token=config.sos_idx, begin=True),
         T.AddToken(token=config.eos_idx, begin=False),
         T.ToTensor(),
-        T.PadTransform(config.max_seq_len, config.padding_idx)
+        T.PadTransform(config.max_seq_len, config.pad_idx)
     )
 
-    data = ChatDataset('./data/dialogs.txt', transform=transforms)
-    loader = DataLoader(data, batch_size=config.batch_size, shuffle=True, pin_memory=True, drop_last=True, num_workers=12)
+    data = ChatDataset('./data/dialogs.pkl', transform=transforms)
+    print(f'Workers amount: {os.cpu_count()}')
+    loader = DataLoader(data, batch_size=config.batch_size, shuffle=True, pin_memory=True, drop_last=True, num_workers=os.cpu_count())
 
     num_tokens = len(vocab)
-    example = data[0]
 
-    return loader, num_tokens, vocab, example
-
-
-if __name__ == '__main__':
-    print(get_data())
+    return loader, num_tokens, vocab

@@ -1,80 +1,70 @@
 import math
 
-import torch.nn as nn
 import torch
-
+import torch.nn as nn
 import config
-
-
-class PositionalEncoding(nn.Module):
-    def __init__(self, dim_model, dropout, max_len):
-        super().__init__()
-
-        self.dropout = nn.Dropout(p=dropout)
-
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, dim_model, 2) * (-math.log(10000.0) / dim_model))
-        pos_encoding = torch.zeros(max_len, 1, dim_model)
-        pos_encoding[:, 0, 0::2] = torch.sin(position * div_term)
-        pos_encoding[:, 0, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pos_encoding', pos_encoding)
-
-    def forward(self, token_embedding):
-        token_embedding = token_embedding + self.pos_encoding[:token_embedding.size(0)]
-        return self.dropout(token_embedding)
+from layer import EncoderLayer, DecoderLayer
+from utils import positional_encoding
 
 
 class Seq2Seq(nn.Module):
-    def __init__(self, num_tokens, dim_model=512, num_heads=8, num_encoder_layers=6, num_decoder_layers=6,
-                 dropout_p=0.1):
+    def __init__(self, num_tokens):
         super().__init__()
 
-        self.dim_model = dim_model
+        self.mem = None
+        self.mem_mask = None
 
-        self.positional_encoding = PositionalEncoding(dim_model, dropout_p, 5000)
-        self.embedding = nn.Embedding(num_tokens, dim_model)
-        self.transformer = nn.Transformer(dim_model, num_heads, num_encoder_layers, num_decoder_layers,
-                                          dropout=dropout_p)
-        self.out = nn.Linear(dim_model, num_tokens)
+        self.R = positional_encoding()
 
-        self.init_weights()
+        self.embedding = nn.Embedding(num_tokens, config.dim_model)
+        self.dropout = nn.Dropout(config.dropout)
+        self.encoder_layers = nn.ModuleList([EncoderLayer(self.R) for _ in range(config.num_layers)])
+        self.decoder_layers = nn.ModuleList([DecoderLayer(self.R) for _ in range(config.num_layers)])
+        self.out = nn.Linear(config.dim_model, num_tokens)
 
-    def init_weights(self) -> None:
-        initrange = 0.1
-        self.embedding.weight.data.uniform_(-initrange, initrange)
-        self.out.bias.data.zero_()
-        self.out.weight.data.uniform_(-initrange, initrange)
+    def forward(self, input, target, train=True):
+        if self.mem is None:
+            self.set_up_mem()
 
-    def forward(self, src, tgt):
-        # src shape: [batch_size, seq_len]
-        # tgt shape: [batch_size, seq_len]
+        input_mask = (input != config.pad_idx).to(torch.int).unsqueeze(1)
+        target_mask = (target != config.pad_idx).to(torch.int).unsqueeze(1)
 
-        tgt_mask = self.get_tgt_mask(tgt.size(1), device=tgt.device)
-        src_pad_mask = self.create_pad_mask(src)
-        tgt_pad_mask = self.create_pad_mask(tgt)
+        input_total_mask = torch.cat((self.mem_mask, input_mask), dim=-1)
 
-        src = self.embedding(src) * math.sqrt(self.dim_model)  # [batch_size, seq_len, dim_model]
-        tgt = self.embedding(tgt) * math.sqrt(self.dim_model)  # [batch_size, seq_len, dim_model]
+        if train:
+            target_nopeak = torch.tril(torch.ones(1, config.max_seq_len - 1, config.max_seq_len - 1, dtype=torch.int, device=config.device))
 
-        src = self.positional_encoding(src)
-        tgt = self.positional_encoding(tgt)
+            target_mask = target_mask & target_nopeak
 
-        src = src.permute(1, 0, 2)  # [seq_len, batch_size, dim_model]
-        tgt = tgt.permute(1, 0, 2)  # [seq_len, batch_size, dim_model]
+        x = self.embedding(input) * math.sqrt(config.dim_model)
+        y = self.embedding(target) * math.sqrt(config.dim_model)
 
-        t_out = self.transformer(src, tgt, tgt_mask=tgt_mask, src_key_padding_mask=src_pad_mask, tgt_key_padding_mask=tgt_pad_mask)
-        out = self.out(t_out)
+        x = self.dropout(x)
+        y = self.dropout(y)
 
+        for i in range(config.num_layers):
+            x_ = x.detach().clone()
+            x = self.encoder_layers[i](x, self.mem[i], input_total_mask)
+            self.add_to_memory(x_, i)
+
+        self.add_to_memory_mask(input_mask)
+
+        for i in range(config.num_layers):
+            y = self.decoder_layers[i](y, x, input_mask, target_mask)
+
+        out = self.out(y)
         return out
 
-    def get_tgt_mask(self, size, device=torch.device('cpu')):
-        return ~torch.tril(torch.ones(size, size, dtype=torch.bool, device=device))
+    def set_up_mem(self):
+        self.mem = [torch.zeros(config.batch_size, 0, config.dim_model, device=config.device) for _ in range(config.num_layers)]
+        self.mem_mask = torch.zeros(config.batch_size, 1, 0, device=config.device)
 
-    def create_pad_mask(self, matrix):
-        return matrix == config.padding_idx
+    def add_to_memory(self, x, i):
+        self.mem[i] = torch.cat((self.mem[i], x), dim=1)[:, -config.max_mem_len:]
 
+    def add_to_memory_mask(self, x_mask):
+        self.mem_mask = torch.cat((self.mem_mask, x_mask), dim=-1)[:, :, -config.max_mem_len:]
 
-if __name__ == '__main__':
-    a = Seq2Seq(40)
-    mask = a.get_tgt_mask(5)
-    print(mask)
+    def clear_memory(self):
+        self.mem = None
+        self.mem_mask = None
