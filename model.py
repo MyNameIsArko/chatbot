@@ -22,7 +22,7 @@ class Seq2Seq(nn.Module):
         self.decoder_layers = nn.ModuleList([DecoderLayer(self.R) for _ in range(config.num_layers)])
         self.out = nn.Linear(config.dim_model, num_tokens)
 
-    def forward(self, input, target, train=True):
+    def forward(self, input, target, train=True, save=True):
         if self.mem is None:
             self.set_up_mem()
 
@@ -45,9 +45,11 @@ class Seq2Seq(nn.Module):
         for i in range(config.num_layers):
             x_ = x.detach().clone()
             x = self.encoder_layers[i](x, self.mem[i], input_total_mask)
-            self.add_to_memory(x_, i)
+            if save:
+                self.add_to_memory(x_, i)
 
-        self.add_to_memory_mask(input_mask)
+        if save:
+            self.add_to_memory_mask(input_mask)
 
         for i in range(config.num_layers):
             y = self.decoder_layers[i](y, x, input_mask, target_mask)

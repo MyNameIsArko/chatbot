@@ -37,10 +37,11 @@ def test():
 
         x = transforms(inp).unsqueeze(0).repeat(config.batch_size, 1).to(config.device)
         pred = ['<sos>']
+        save = True
 
         while pred[-1] != '<eos>':
             y = torch.tensor(vocab.lookup_indices(pred), device=config.device).unsqueeze(0).repeat(config.batch_size, 1)
-            logits = model(x, y, train=False)  # [batch_size, seq_len, num_tokens]
+            logits = model(x, y, train=False, save=save)  # [batch_size, seq_len, num_tokens]
             logits = logits[0][-1]  # [num_tokens]
             out = nucleus_search(logits)
             out = vocab.lookup_token(out)
@@ -48,8 +49,11 @@ def test():
             if out != '<eos>':
                 print(out, end=' ')
             pred.append(out)
+            save = False
             sleep(0.05)
 
+        y = torch.tensor(vocab.lookup_indices(pred), device=config.device).unsqueeze(0).repeat(config.batch_size, 1)
+        model(y, y, train=False)
         print()
 
 
