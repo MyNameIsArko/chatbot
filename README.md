@@ -19,4 +19,4 @@ Chatbot was written using full transformer model with 6 encoders and 6 decoders.
 - V3 - Chatbot with longer memory using Compressive Transformer
 
 ## Note
-Transformer with memory requires related dialogs to be in sequence. Due to the dataset used, sequences does not have one length, forcing to create empty dialogs which hurts the model performance. Also, dataset when used as sequences has low amount of samples. For best experience use version 1. 
+Transformer with memory requires related dialogs to be in sequence. Due to the dataset used, sequences does not have one length, forcing to create empty dialogs which hurts the model performance. Also, this dataset when used as sequences has low amount of samples. For best experience use version 1. 
