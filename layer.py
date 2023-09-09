@@ -4,13 +4,25 @@ from attention import MultiHeadAttention
 import config
 
 
+class Compression(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.comp = nn.Conv1d(config.dim_model, config.dim_model, kernel_size=config.compression_rate, stride=config.compression_rate)
+
+    def forward(self, x):
+        #  x shape: [batch_size, seq_len, dim_model]
+        x = x.permute(0, 2, 1)
+        c_x = self.comp(x)
+        return c_x.permute(0, 2, 1)
+
+
 class FeedForward(nn.Module):
     def __init__(self):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(config.dim_model, config.dim_inner),
             nn.Dropout(config.dropout),
-            nn.ReLU(),
+            nn.SiLU(),
             nn.Linear(config.dim_inner, config.dim_model),
             nn.Dropout(config.dropout)
         )
@@ -31,12 +43,13 @@ class EncoderLayer(nn.Module):
         self.attn = MultiHeadAttention(R)
         self.ff = FeedForward()
 
-    def forward(self, x, mem, mask):
-        h = torch.cat((mem, x), dim=1)
-        out = self.layer_norm2(self.attn(x, h, h, mask) + x)
+    def forward(self, x, mem, c_mem, mask):
+        h = torch.cat((c_mem, mem, x), dim=1)
+        out, dots = self.attn(x, h, h, mask, return_dots=True)
+        out = self.layer_norm2(out + x)
         out = self.dropout(out)
         out = self.ff(out)
-        return out
+        return out, dots
 
 
 class DecoderLayer(nn.Module):

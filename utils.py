@@ -26,7 +26,7 @@ def nucleus_search(logits):
 
 
 def positional_encoding():
-    total_len = config.max_seq_len + config.max_mem_len
+    total_len = config.max_seq_len + config.max_mem_len + config.max_cmem_len
     position = torch.arange(total_len).unsqueeze(1)
     div_term = torch.exp(torch.arange(0, config.dim_model, 2) * (-math.log(10000.0) / config.dim_model))
     pe = torch.zeros(total_len, 1, config.dim_model, device=config.device)
@@ -41,3 +41,9 @@ def circulant_shift(x, shift):
     i = i.flip(1).repeat(1, 2).unfold(dimension=1, size=width, step=1).flip(-1).unsqueeze(0)
     i = i.repeat(batch_size, num_heads, 1, 1)[:, :, :height]
     return x.gather(3, i)
+
+
+def full_attn(q, k, v):
+    dots = torch.einsum('bhid,bhjd->bhij', q, k) / math.sqrt(config.dim_model)
+    attn = dots.softmax(dim=-1)
+    return torch.einsum('bhij,bhjd->bhid', attn, v)

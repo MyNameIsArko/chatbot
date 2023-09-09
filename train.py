@@ -23,8 +23,9 @@ def train():
     model = Seq2Seq(num_tokens=num_tokens).to(config.device)
 
     opt = optim.AdamW(model.parameters(), lr=config.lr)
-    warmup_scheduler = optim.lr_scheduler.LinearLR(opt, 0.1, 1, config.num_warmup)
-    scheduler = optim.lr_scheduler.StepLR(opt, 100, 0.1)
+
+    scheduler = optim.lr_scheduler.OneCycleLR(opt, max_lr=config.lr, epochs=config.num_epochs, steps_per_epoch=len(loader))
+
     loss_fn = nn.CrossEntropyLoss(ignore_index=config.pad_idx, label_smoothing=0.1)
 
     os.makedirs('saves', exist_ok=True)
@@ -38,15 +39,18 @@ def train():
             'max_seq_len': config.max_seq_len,
             'num_dialogs': config.num_dialogs,
             'batch_size': config.batch_size,
-            'num_warmup': config.num_warmup,
             'num_layers': config.num_layers,
             'num_heads': config.num_heads,
             'dim_model': config.dim_model,
             'dim_inner': config.dim_inner,
+            'compression_loss_weight': config.compression_loss_weight,
+            'clip': config.clip,
+            'max_mem_len': config.max_mem_len,
+            'max_cmem_len': config.max_cmem_len,
+            'compression_rate': config.compression_rate,
         },
         sync_tensorboard=True
     )
-    text_table = wandb.Table(columns=['epoch', 'input', 'prediction'])
     writer = SummaryWriter(f'logs/chatbot_{date}')
 
     t = tqdm(range(1, config.num_epochs + 1), position=0, leave=True)
@@ -58,7 +62,8 @@ def train():
         t2 = tqdm(loader, position=1, leave=False)
         for dialog in t2:
             model.clear_memory()
-            dialog_loss = 0
+            attention_loss = 0
+            aux_loss = 0
             for i in range(len(dialog) - 1):
                 x = dialog[i].to(config.device)
                 y = dialog[i+1].to(config.device)
@@ -66,35 +71,35 @@ def train():
                 y_input = y[:, :-1]
                 y_target = y[:, 1:]
 
-                pred = model(x, y_input)
+                pred, al = model(x, y_input)
 
                 pred = pred.permute(0, 2, 1)  # [batch_size, num_tokens, seq_len]
 
-                loss = loss_fn(pred, y_target)
-                dialog_loss += loss
+                attention_loss += loss_fn(pred, y_target)
+                aux_loss += al
 
                 if random.random() < config.dropout / len(dialog):
                     model.clear_memory()
 
             opt.zero_grad()
-            dialog_loss.backward()
+            loss = attention_loss + aux_loss
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), config.clip)
             opt.step()
 
-            dialog_loss = dialog_loss.detach().item()
+            loss = loss.detach().item()
 
-            total_loss += dialog_loss
+            total_loss += loss
 
-            t2.set_postfix(step_loss=dialog_loss)
+            t2.set_postfix(attention_loss=attention_loss.detach().item(), aux_loss=aux_loss.detach().item(), lr=opt.param_groups[0]['lr'])
+            writer.add_scalar('step_loss', loss, global_step)
             writer.add_scalar('lr', opt.param_groups[0]['lr'], global_step)
             global_step += 1
 
-        if epoch < config.num_warmup:
-            warmup_scheduler.step()
-        else:
-            scheduler.step()
+            scheduler.step()  # update lr on every step instead of every epoch
 
         t.set_postfix(loss=(total_loss / len(loader)))
-        writer.add_scalar('loss', total_loss / len(loader), epoch)
+        writer.add_scalar('epoch_loss', total_loss / len(loader), epoch)
 
         if epoch % config.test_interval == 0:
             model.clear_memory()
@@ -102,16 +107,14 @@ def train():
             x = dialog[0].to(config.device)
             y = dialog[1].to(config.device)
             y_input = y[:, :-1]
-            pred = model(x, y_input)  # [seq_len, batch_size, num_tokens]
+            pred, _ = model(x, y_input)  # [seq_len, batch_size, num_tokens]
             pred = pred.permute(0, 2, 1)  # [batch_size, num_tokens, seq_len]
             ans = pred.argmax(dim=1)[0].detach().tolist()
             ans = ' '.join(vocab.lookup_tokens(ans))
             qs = ' '.join(vocab.lookup_tokens(x[0].tolist()))
 
-            text = ' '.join(qs) + '\n\n' + ' '.join(ans)
+            text = qs + '\n\n' + ans
             writer.add_text('text_generated', text, epoch)
-            text_table.add_data(epoch, qs, ans)
-            wandb.log({'prediction_table': text_table}, step=epoch)
             model.train()
 
         if epoch % config.save_interval == 0:

@@ -28,7 +28,7 @@ class MultiHeadAttention(nn.Module):
         self.dropout = nn.Dropout(config.dropout)
         self.out = nn.Linear(config.dim_model, config.dim_model, bias=False)
 
-    def forward(self, q, k, v, mask=None):
+    def forward(self, q, k, v, mask=None, return_dots=False):
         seq_len = q.shape[1]
         total_len = v.shape[1]
 
@@ -60,4 +60,6 @@ class MultiHeadAttention(nn.Module):
         concat = score.transpose(1, 2).contiguous().view(config.batch_size, -1, config.dim_model)
         out = self.out(concat)
 
+        if return_dots:
+            return out, (q, k, v)
         return out
